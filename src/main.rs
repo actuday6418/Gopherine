@@ -1,14 +1,15 @@
+use bincode;
 use futures::StreamExt;
-use std::time::SystemTime;
-use telegram_bot::*;
 use reqwest::Url;
 use std::io::Write;
-use bincode;
+use std::time::SystemTime;
+use telegram_bot::*;
 
 pub mod course_tree;
 
 #[tokio::main]
 async fn main() {
+    println!("Gopherine says Hi!!");
     let time_begin = SystemTime::now();
 
     let mut ct = course_tree::CourseTree::new();
@@ -16,19 +17,41 @@ async fn main() {
     let mut password = String::new();
     print!("Enter the password to be used: ");
     std::io::stdout().flush().unwrap();
-    
+
     std::io::stdin().read_line(&mut password).unwrap();
     let password = password.trim();
 
     let mut api_key = String::new();
     print!("Enter your api key: ");
     std::io::stdout().flush().unwrap();
-    
+
     std::io::stdin().read_line(&mut api_key).unwrap();
     let api_key = api_key.trim();
     let api = Api::new(api_key);
 
     let mut stream = api.stream();
+
+    {
+        if let Ok(mut file) = std::fs::File::open(".backup") {
+            println!("Backup found: would you like to restore? (y/n)");
+            let mut choice = String::new();
+            std::io::stdin().read_line(&mut choice).unwrap();
+            match choice.as_str() {
+                "y" | "Y" => {
+                    ct = bincode::deserialize_from(&mut file).expect("Corrupted backup file!");
+                    println!("Backup successful!");
+                }
+                "n" | "N" => {
+                    println!("Backup skipped!");
+                }
+                _ => {
+                    println!("I'll presume that means you want to skip the backup. Restart the program if you want to backup.");
+                }
+            }
+        }
+    }
+
+    println!("Server's now starting..");
 
     while let Some(update) = stream.next().await {
         let update = update.unwrap();
@@ -71,12 +94,14 @@ async fn main() {
         } else if let UpdateKind::Message(message) = update.kind {
             if let MessageKind::Text { ref data, .. } = message.kind {
                 match data.as_str() {
-                    _ if data.starts_with(format!("/backup {}",password).as_str()) => {
-                      let backup = std::fs::File::create(".backup").unwrap();
-                      let backup = std::io::BufWriter::new(backup);
-                      bincode::serialize_into(backup,&ct).unwrap();
+                    _ if data.starts_with(format!("/backup {}", password).as_str()) => {
+                        let backup = std::fs::File::create(".backup").unwrap();
+                        let backup = std::io::BufWriter::new(backup);
+                        bincode::serialize_into(backup, &ct).unwrap();
+                        let message = message.text_reply("Backup created successfully!");
+                        api.send(message).await.unwrap();
                     }
-                    _ if data.starts_with(format!("/edit {} ",password).as_str()) => {
+                    _ if data.starts_with(format!("/edit {} ", password).as_str()) => {
                         let command = data[11..].to_string();
                         if command.starts_with("/add_file ") {
                             let temp = command[10..].to_string();
@@ -87,75 +112,74 @@ async fn main() {
                             match dir_and_file_and_link.len() {
                                 3 => {
                                     //directory, file name and link have been provided
-                                    if Url::parse(&dir_and_file_and_link.iter().nth(2).unwrap()).is_ok() {
-                                      println!("Valid!");
-                                    } else {
-                                      println!("Invalid!");
-                                    }
-                                    if Url::parse(&dir_and_file_and_link.iter().nth(2).unwrap()).is_ok() {
-                                    if ct
-                                        .add_file(
-                                            dir_and_file_and_link
-                                                .iter()
-                                                .nth(0)
-                                                .unwrap()
-                                                .split("/")
-                                                .map(String::from)
-                                                .collect::<Vec<String>>(),
-                                            &dir_and_file_and_link.iter().nth(1).unwrap(),
-                                            &dir_and_file_and_link.iter().nth(2).unwrap(),
-                                        )
-                                        .is_err()
+                                    if Url::parse(&dir_and_file_and_link.iter().nth(2).unwrap())
+                                        .is_ok()
                                     {
-                                        let message = message.text_reply(
+                                        if ct
+                                            .add_file(
+                                                dir_and_file_and_link
+                                                    .iter()
+                                                    .nth(0)
+                                                    .unwrap()
+                                                    .split("/")
+                                                    .map(String::from)
+                                                    .collect::<Vec<String>>(),
+                                                &dir_and_file_and_link.iter().nth(1).unwrap(),
+                                                &dir_and_file_and_link.iter().nth(2).unwrap(),
+                                            )
+                                            .is_err()
+                                        {
+                                            let message = message.text_reply(
                                             "Error! The resource address you entered is invalid!!",
                                         );
-                                        api.send(message).await.unwrap();
+                                            api.send(message).await.unwrap();
+                                        } else {
+                                            api.send(
+                                                message.text_reply(
+                                                    "You have succesfully added a file!",
+                                                ),
+                                            )
+                                            .await
+                                            .unwrap();
+                                        }
                                     } else {
-                                        api.send(
-                                            message
-                                                .text_reply("You have succesfully added a file!"),
-                                        )
-                                        .await
-                                        .unwrap();
-                                    }
-                                    } else {
-                                        api.send(
-                                            message
-                                                .text_reply("Error! The address you entered is invalid!"),
-                                        )
+                                        api.send(message.text_reply(
+                                            "Error! The address you entered is invalid!",
+                                        ))
                                         .await
                                         .unwrap();
                                     }
                                 }
                                 2 => {
                                     //directory is expected to be root. File name and link are provided
-                                    if Url::parse(&dir_and_file_and_link.iter().nth(1).unwrap()).is_ok() {
-                                    if ct
-                                        .add_file(
-                                            Vec::new(),
-                                            &dir_and_file_and_link.iter().nth(0).unwrap(),
-                                            &dir_and_file_and_link.iter().nth(1).unwrap(),
-                                        )
-                                        .is_err()
+                                    if Url::parse(&dir_and_file_and_link.iter().nth(1).unwrap())
+                                        .is_ok()
                                     {
-                                        let message = message.text_reply(
+                                        if ct
+                                            .add_file(
+                                                Vec::new(),
+                                                &dir_and_file_and_link.iter().nth(0).unwrap(),
+                                                &dir_and_file_and_link.iter().nth(1).unwrap(),
+                                            )
+                                            .is_err()
+                                        {
+                                            let message = message.text_reply(
                                             "Error: The resource address you entered is invalid!!",
                                         );
-                                        api.send(message).await.unwrap();
+                                            api.send(message).await.unwrap();
+                                        } else {
+                                            api.send(
+                                                message.text_reply(
+                                                    "You have succesfully added a file!",
+                                                ),
+                                            )
+                                            .await
+                                            .unwrap();
+                                        }
                                     } else {
-                                        api.send(
-                                            message
-                                                .text_reply("You have succesfully added a file!"),
-                                        )
-                                        .await
-                                        .unwrap();
-                                    }}
-                                     else {
-                                        api.send(
-                                            message
-                                                .text_reply("Error! The address you entered is invalid!"),
-                                        )
+                                        api.send(message.text_reply(
+                                            "Error! The address you entered is invalid!",
+                                        ))
                                         .await
                                         .unwrap();
                                     }
